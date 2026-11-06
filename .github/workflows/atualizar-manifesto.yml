@@ -1,0 +1,49 @@
+name: Publicar manifesto de atualizacoes
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag de release ja publicada, por exemplo v1.0.6
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  atualizar:
+    if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Consultar release publicada
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body,tagName,isDraft,isPrerelease > "$RUNNER_TEMP/release.json"
+          mkdir -p "$RUNNER_TEMP/apks"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --dir "$RUNNER_TEMP/apks"
+      - name: Gerar update.json
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          python3 scripts/gerar_manifesto.py --tag "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --release-json "$RUNNER_TEMP/release.json" --apk-dir "$RUNNER_TEMP/apks" --output update.json
+      - name: Salvar manifesto no repositorio
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add update.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Atualizar Meu Fluxo para ${{ github.event.release.tag_name || inputs.tag }}"
+            git push origin "HEAD:${{ github.event.repository.default_branch }}"
+          fi
